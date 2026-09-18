@@ -1,0 +1,7 @@
+.agents/
+pi/
+ausgabe.md
+container.sh
+globalState.json
+pisetup.sh
+super.sh
