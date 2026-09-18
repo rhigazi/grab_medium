@@ -1,7 +1,8 @@
-.agents/
-pi/
-ausgabe.md
-container.sh
-globalState.json
-pisetup.sh
-super.sh
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+*.duckdb
+*.log
+.pytest_cache/
