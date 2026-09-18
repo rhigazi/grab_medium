@@ -1,71 +1,58 @@
-"""Configuration management for grab_medium and InvestigateMedia."""
+"""Configuration management for grab_medium using db.cfg (JSON)."""
 
 import json
-import os
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
+
+DEFAULT_CONFIG_PATH = "db.cfg"
+DEFAULT_DB_PATH = "grab_medium.duckdb"
 
 
-@dataclass
-class Config:
-    """Configuration model for InvestigateMedia."""
-
-    data_path: str
-    db_path: str
-
-
-def load_config(
-    config_file: Optional[str] = None,
-    db_path_override: Optional[str] = None,
-    data_path_override: Optional[str] = None,
-) -> Config:
-    """Loads configuration from file or environment variables with optional CLI overrides.
-
-    Precedence for config path:
-    1. Direct parameter `config_file`
-    2. Environment variable `INVESTIGATE_MEDIA_CONFIG`
-    3. Environment variable `GRAB_MEDIUM_CONFIG`
-    4. Default `db.cfg` in current working directory.
-    """
-    if db_path_override and data_path_override:
-        return Config(data_path=data_path_override, db_path=db_path_override)
-
-    cfg_path: Optional[Path] = None
-
-    if config_file:
-        cfg_path = Path(config_file)
-    elif os.getenv("INVESTIGATE_MEDIA_CONFIG"):
-        cfg_path = Path(os.environ["INVESTIGATE_MEDIA_CONFIG"])
-    elif os.getenv("GRAB_MEDIUM_CONFIG"):
-        cfg_path = Path(os.environ["GRAB_MEDIUM_CONFIG"])
-    else:
-        default_cfg = Path.cwd() / "db.cfg"
-        if default_cfg.exists():
-            cfg_path = default_cfg
-
-    data_path = data_path_override
-    db_path = db_path_override
-
-    if cfg_path and cfg_path.exists():
+def load_config(config_path: str = DEFAULT_CONFIG_PATH) -> dict:
+    """Loads configuration from JSON file. Returns empty dict if file does not exist or is invalid."""
+    path = Path(config_path)
+    if path.exists() and path.is_file():
         try:
-            with open(cfg_path, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if not data_path:
-                    data_path = data.get("data_path")
-                if not db_path:
-                    db_path = data.get("db_path")
-        except Exception as e:
-            raise ValueError(f"Failed to parse configuration file '{cfg_path}': {e}")
-    elif not (db_path and data_path):
-        raise FileNotFoundError(
-            "Configuration file 'db.cfg' not found. "
-            "Please create 'db.cfg' with 'data_path' and 'db_path' or specify command-line arguments."
-        )
+                if isinstance(data, dict):
+                    return data
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
 
-    if not data_path or not db_path:
+
+def save_config(config_data: dict, config_path: str = DEFAULT_CONFIG_PATH) -> None:
+    """Saves configuration dictionary to JSON file."""
+    path = Path(config_path)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(config_data, f, indent=2)
+
+
+def resolve_config(
+    data_path: Optional[str] = None,
+    db_path: Optional[str] = None,
+    config_path: str = DEFAULT_CONFIG_PATH,
+) -> Tuple[str, str]:
+    """Resolves data_path and db_path from CLI arguments and db.cfg file, updating db.cfg.
+
+    Raises ValueError if data_path cannot be resolved.
+    """
+    config = load_config(config_path)
+
+    # Resolve data_path
+    resolved_data_path = data_path or config.get("data_path")
+    if not resolved_data_path:
         raise ValueError(
-            "Configuration incomplete. Both 'data_path' and 'db_path' must be specified in 'db.cfg' or via arguments."
+            "Data path not specified. Please provide --path or configure data_path in db.cfg."
         )
 
-    return Config(data_path=data_path, db_path=db_path)
+    # Resolve db_path: CLI parameter > db.cfg > DEFAULT_DB_PATH
+    resolved_db_path = db_path or config.get("db_path") or DEFAULT_DB_PATH
+
+    # Update and save config
+    config["data_path"] = resolved_data_path
+    config["db_path"] = resolved_db_path
+    save_config(config, config_path)
+
+    return resolved_data_path, resolved_db_path
