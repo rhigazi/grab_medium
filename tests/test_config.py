@@ -1,57 +1,70 @@
+"""Tests for config loading in grab_medium.config."""
+
 import json
 import pytest
-from grab_medium.config import load_config, save_config, resolve_config
+from pathlib import Path
+from grab_medium.config import load_config, Config
 
 
-def test_save_and_load_config(tmp_path):
-    cfg_path = str(tmp_path / "db.cfg")
-    data = {"data_path": "/some/data", "db_path": "test.duckdb"}
+def test_load_config_from_explicit_file(tmp_path):
+    cfg_file = tmp_path / "db.cfg"
+    cfg_data = {
+        "data_path": "/path/to/media",
+        "db_path": "test.duckdb",
+    }
+    cfg_file.write_text(json.dumps(cfg_data), encoding="utf-8")
 
-    save_config(data, cfg_path)
-    loaded = load_config(cfg_path)
-
-    assert loaded == data
-
-
-def test_load_nonexistent_config(tmp_path):
-    cfg_path = str(tmp_path / "nonexistent.cfg")
-    loaded = load_config(cfg_path)
-    assert loaded == {}
+    config = load_config(config_file=str(cfg_file))
+    assert config.data_path == "/path/to/media"
+    assert config.db_path == "test.duckdb"
 
 
-def test_resolve_config_with_cli_args(tmp_path):
-    cfg_path = str(tmp_path / "db.cfg")
-    data_path, db_path = resolve_config(
-        data_path="/path/a",
-        db_path="my_db.duckdb",
-        config_path=cfg_path,
+def test_load_config_with_cli_overrides(tmp_path):
+    cfg_file = tmp_path / "db.cfg"
+    cfg_data = {
+        "data_path": "/path/to/media",
+        "db_path": "test.duckdb",
+    }
+    cfg_file.write_text(json.dumps(cfg_data), encoding="utf-8")
+
+    config = load_config(
+        config_file=str(cfg_file),
+        db_path_override="override.duckdb",
+        data_path_override="/override/path",
     )
-
-    assert data_path == "/path/a"
-    assert db_path == "my_db.duckdb"
-
-    # Verify saved in db.cfg
-    loaded = load_config(cfg_path)
-    assert loaded["data_path"] == "/path/a"
-    assert loaded["db_path"] == "my_db.duckdb"
+    assert config.data_path == "/override/path"
+    assert config.db_path == "override.duckdb"
 
 
-def test_resolve_config_from_file_fallback(tmp_path):
-    cfg_path = str(tmp_path / "db.cfg")
-    initial_data = {"data_path": "/path/b", "db_path": "existing.duckdb"}
-    save_config(initial_data, cfg_path)
+def test_load_config_env_var(tmp_path, monkeypatch):
+    cfg_file = tmp_path / "custom.cfg"
+    cfg_data = {
+        "data_path": "/env/media",
+        "db_path": "env.duckdb",
+    }
+    cfg_file.write_text(json.dumps(cfg_data), encoding="utf-8")
 
-    data_path, db_path = resolve_config(
-        data_path=None,
-        db_path=None,
-        config_path=cfg_path,
-    )
-
-    assert data_path == "/path/b"
-    assert db_path == "existing.duckdb"
+    monkeypatch.setenv("INVESTIGATE_MEDIA_CONFIG", str(cfg_file))
+    config = load_config()
+    assert config.data_path == "/env/media"
+    assert config.db_path == "env.duckdb"
 
 
-def test_resolve_config_missing_data_path(tmp_path):
-    cfg_path = str(tmp_path / "db.cfg")
-    with pytest.raises(ValueError, match="Data path not specified"):
-        resolve_config(data_path=None, db_path=None, config_path=cfg_path)
+def test_load_config_missing_raises_error(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("INVESTIGATE_MEDIA_CONFIG", raising=False)
+    monkeypatch.delenv("GRAB_MEDIUM_CONFIG", raising=False)
+
+    with pytest.raises(FileNotFoundError, match="Configuration file 'db.cfg' not found"):
+        load_config()
+
+
+def test_load_config_missing_file_with_overrides(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("INVESTIGATE_MEDIA_CONFIG", raising=False)
+    monkeypatch.delenv("GRAB_MEDIUM_CONFIG", raising=False)
+
+    # When CLI overrides are provided for both, it should work even if db.cfg is missing
+    config = load_config(db_path_override="override.duckdb", data_path_override="/override/path")
+    assert config.data_path == "/override/path"
+    assert config.db_path == "override.duckdb"

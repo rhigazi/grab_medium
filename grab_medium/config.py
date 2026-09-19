@@ -1,58 +1,92 @@
-"""Configuration management for grab_medium using db.cfg (JSON)."""
+"""Configuration management for grab_medium and InvestigateMedia."""
 
 import json
+import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union, Dict, Any
 
 DEFAULT_CONFIG_PATH = "db.cfg"
-DEFAULT_DB_PATH = "grab_medium.duckdb"
 
 
-def load_config(config_path: str = DEFAULT_CONFIG_PATH) -> dict:
-    """Loads configuration from JSON file. Returns empty dict if file does not exist or is invalid."""
-    path = Path(config_path)
-    if path.exists() and path.is_file():
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, dict):
-                    return data
-        except (json.JSONDecodeError, OSError):
-            pass
-    return {}
+@dataclass
+class Config:
+    """Configuration model for InvestigateMedia."""
 
-
-def save_config(config_data: dict, config_path: str = DEFAULT_CONFIG_PATH) -> None:
-    """Saves configuration dictionary to JSON file."""
-    path = Path(config_path)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(config_data, f, indent=2)
+    data_path: str
+    db_path: str
 
 
 def resolve_config(
     data_path: Optional[str] = None,
     db_path: Optional[str] = None,
-    config_path: str = DEFAULT_CONFIG_PATH,
+    config_path: Optional[str] = None,
 ) -> Tuple[str, str]:
-    """Resolves data_path and db_path from CLI arguments and db.cfg file, updating db.cfg.
+    """Resolves data_path and db_path from CLI arguments, env vars, or configuration file.
 
-    Raises ValueError if data_path cannot be resolved.
+    Precedence:
+    1. CLI arguments (data_path, db_path)
+    2. Environment variables INVESTIGATE_MEDIA_CONFIG or GRAB_MEDIUM_CONFIG
+    3. Configuration file (config_path or db.cfg)
     """
-    config = load_config(config_path)
+    cfg_path: Optional[Path] = None
 
-    # Resolve data_path
-    resolved_data_path = data_path or config.get("data_path")
-    if not resolved_data_path:
-        raise ValueError(
-            "Data path not specified. Please provide --path or configure data_path in db.cfg."
+    if config_path:
+        cfg_path = Path(config_path)
+    elif os.getenv("INVESTIGATE_MEDIA_CONFIG"):
+        cfg_path = Path(os.environ["INVESTIGATE_MEDIA_CONFIG"])
+    elif os.getenv("GRAB_MEDIUM_CONFIG"):
+        cfg_path = Path(os.environ["GRAB_MEDIUM_CONFIG"])
+    else:
+        default_cfg = Path.cwd() / DEFAULT_CONFIG_PATH
+        if default_cfg.exists():
+            cfg_path = default_cfg
+        else:
+            cfg_path = Path(DEFAULT_CONFIG_PATH)
+
+    res_data_path = data_path
+    res_db_path = db_path
+
+    if cfg_path and cfg_path.exists():
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                cfg_data = json.load(f)
+                if not res_data_path:
+                    res_data_path = cfg_data.get("data_path")
+                if not res_db_path:
+                    res_db_path = cfg_data.get("db_path")
+        except Exception as e:
+            raise ValueError(f"Failed to parse configuration file '{cfg_path}': {e}")
+    elif not (res_db_path and res_data_path):
+        raise FileNotFoundError(
+            f"Configuration file '{cfg_path or DEFAULT_CONFIG_PATH}' not found. "
+            "Please create 'db.cfg' with 'data_path' and 'db_path' or specify command-line arguments."
         )
 
-    # Resolve db_path: CLI parameter > db.cfg > DEFAULT_DB_PATH
-    resolved_db_path = db_path or config.get("db_path") or DEFAULT_DB_PATH
+    if not res_data_path or not res_db_path:
+        raise ValueError(
+            "Configuration incomplete. Both 'data_path' and 'db_path' must be specified in 'db.cfg' or via arguments."
+        )
 
-    # Update and save config
-    config["data_path"] = resolved_data_path
-    config["db_path"] = resolved_db_path
-    save_config(config, config_path)
+    return res_data_path, res_db_path
 
-    return resolved_data_path, resolved_db_path
+
+def load_config(
+    config_path: Optional[str] = None,
+    config_file: Optional[str] = None,
+    db_path_override: Optional[str] = None,
+    data_path_override: Optional[str] = None,
+    **kwargs: Any,
+) -> Config:
+    """Loads configuration and returns a Config object. Accepts multiple argument style aliases for compatibility."""
+    cfg_file = config_path or config_file or kwargs.get("config")
+    db_path = db_path_override or kwargs.get("db_path")
+    data_path = data_path_override or kwargs.get("data_path")
+
+    res_data_path, res_db_path = resolve_config(
+        data_path=data_path,
+        db_path=db_path,
+        config_path=cfg_file,
+    )
+
+    return Config(data_path=res_data_path, db_path=res_db_path)

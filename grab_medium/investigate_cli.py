@@ -2,7 +2,7 @@
 
 import sys
 import click
-from grab_medium.config import load_config
+from grab_medium.config import resolve_config, load_config
 from grab_medium.database import Database
 from grab_medium.formatter import format_output, FormatType
 from grab_medium.investigate_db import InvestigateDB
@@ -47,12 +47,13 @@ def cli(ctx: click.Context, config: str, db_path: str, data_path: str, format: s
     ctx.obj["format"] = fmt
 
     try:
-        cfg = load_config(
-            config_file=config,
-            db_path_override=db_path,
-            data_path_override=data_path,
+        res_data_path, res_db_path = resolve_config(
+            data_path=data_path,
+            db_path=db_path,
+            config_path=config,
         )
-        db = Database(cfg.db_path)
+        db = Database(res_db_path)
+        db.init_schema()
         ctx.obj["db"] = db
         ctx.obj["investigate_db"] = InvestigateDB(db)
     except Exception as e:
