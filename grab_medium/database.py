@@ -81,6 +81,21 @@ class Database:
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_target ON notes(target_type, target_id);")
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notes (
+                id BIGINT PRIMARY KEY DEFAULT nextval('seq_notes_id'),
+                target_type VARCHAR NOT NULL,
+                target_id BIGINT NOT NULL,
+                source VARCHAR NOT NULL,
+                content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_target ON notes(target_type, target_id);")
+
     def media_exists(self, name: str) -> bool:
         """Checks if a media collection name already exists."""
         conn = self.get_connection()
