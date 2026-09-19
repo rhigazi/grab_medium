@@ -1,5 +1,6 @@
 """CLI entry point for grab_medium."""
 
+import json
 import sys
 from typing import Optional
 import click
@@ -32,6 +33,11 @@ from grab_medium.orchestrator import Orchestrator
     help="Error log file path.",
 )
 @click.option(
+    "--config-path",
+    default=None,
+    help="Configuration file location.",
+)
+@click.option(
     "--sync",
     is_flag=True,
     default=False,
@@ -43,19 +49,44 @@ from grab_medium.orchestrator import Orchestrator
     default=False,
     help="Simulate sync without committing changes to database.",
 )
-def cli(name: str, path: str, db_path: str, log_path: str, sync: bool, dry_run: bool) -> None:
+def cli(
+    name: str,
+    path: Optional[str],
+    db_path: Optional[str],
+    log_path: str,
+    config_path: Optional[str],
+    sync: bool,
+    dry_run: bool,
+) -> None:
     """grab_medium: High-performance media directory scanner and DuckDB ingester."""
+    try:
+        resolved_data_path, resolved_db_path = resolve_config(
+            data_path=path,
+            db_path=db_path,
+            config_path=config_path,
+        )
+    except Exception as e:
+        click.echo(f"[Error: Data path not specified or config error: {e}]", err=True)
+        sys.exit(1)
+
+    cfg_file = config_path or DEFAULT_CONFIG_PATH
+    try:
+        with open(cfg_file, "w", encoding="utf-8") as f:
+            json.dump({"data_path": resolved_data_path, "db_path": resolved_db_path}, f, indent=2)
+    except Exception:
+        pass
+
     mode_str = "[Syncing" if sync else "[Scanning"
     if dry_run:
         mode_str += " (Dry Run)"
-    click.echo(f"{mode_str} {path}...]")
+    click.echo(f"{mode_str} {resolved_data_path}...]")
 
-    db = Database(db_path)
+    db = Database(resolved_db_path)
     orchestrator = Orchestrator(db, log_path=log_path)
 
     try:
         click.echo("[Processing metadata...]")
-        res = orchestrator.run_scan(name=name, target_path=path, sync=sync, dry_run=dry_run)
+        res = orchestrator.run_scan(name=name, target_path=resolved_data_path, sync=sync, dry_run=dry_run)
         if dry_run and isinstance(res, dict):
             click.echo(f"[Dry Run complete! Summary: {res}]")
         else:

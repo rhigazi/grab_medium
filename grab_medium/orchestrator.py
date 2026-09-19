@@ -5,9 +5,30 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Union
 from grab_medium.database import Database
-from grab_medium.hasher import compute_quick_hash
+from grab_medium.hasher import compute_quick_hash, compute_full_hash
 
 BATCH_SIZE = 5000
+
+
+def _calculate_path_similarity(path1: str, path2: str) -> float:
+    """Calculates similarity score between two relative paths."""
+    p1_parts = Path(path1).parts
+    p2_parts = Path(path2).parts
+    if not p1_parts or not p2_parts:
+        return 0.0
+
+    score = 0.0
+    # Same filename
+    if p1_parts[-1] == p2_parts[-1]:
+        score += 10.0
+
+    # Common directory components
+    dirs1 = set(p1_parts[:-1])
+    dirs2 = set(p2_parts[:-1])
+    common_dirs = dirs1.intersection(dirs2)
+    score += len(common_dirs) * 2.0
+
+    return score
 
 
 class Orchestrator:
@@ -203,6 +224,7 @@ class Orchestrator:
             conn.execute("BEGIN TRANSACTION;")
 
         try:
+            # Stage 1 & Stage 2 matching on relative path
             for rel_p, scanned in scanned_map.items():
                 if rel_p in db_rel_map:
                     db_item = db_rel_map[rel_p]
@@ -214,25 +236,41 @@ class Orchestrator:
                     if db_is_dir == scanned_is_dir:
                         if db_is_dir:
                             stats["matched"] += 1
+                            if not dry_run:
+                                parent_p = scanned[4]
+                                conn.execute(
+                                    "UPDATE entries SET parent_rel_path = ? WHERE id = ?",
+                                    [parent_p, db_id],
+                                )
                         else:
+                            # Stage 1: Size and MTime metadata check
                             if db_size == scanned_size and (db_mtime == scanned_mtime or not db_mtime):
                                 stats["matched"] += 1
+                                if not dry_run:
+                                    parent_p = scanned[4]
+                                    conn.execute(
+                                        "UPDATE entries SET parent_rel_path = ? WHERE id = ?",
+                                        [parent_p, db_id],
+                                    )
                             else:
+                                # Stage 2: Quick-Hash check when metadata differs
                                 full_file_path = target_path_obj / rel_p
                                 qhash = compute_quick_hash(full_file_path) if full_file_path.exists() else None
                                 if qhash and db_hash and qhash == db_hash:
                                     stats["matched"] += 1
                                     if not dry_run:
+                                        parent_p = scanned[4]
                                         conn.execute(
-                                            "UPDATE entries SET modified_at = ?, size_bytes = ? WHERE id = ?",
-                                            [scanned_mtime, scanned_size, db_id],
+                                            "UPDATE entries SET modified_at = ?, size_bytes = ?, parent_rel_path = ? WHERE id = ?",
+                                            [scanned_mtime, scanned_size, parent_p, db_id],
                                         )
                                 else:
                                     stats["changed"] += 1
                                     if not dry_run:
+                                        parent_p = scanned[4]
                                         conn.execute(
-                                            "UPDATE entries SET modified_at = ?, size_bytes = ?, content_hash = ? WHERE id = ?",
-                                            [scanned_mtime, scanned_size, qhash, db_id],
+                                            "UPDATE entries SET modified_at = ?, size_bytes = ?, content_hash = ?, parent_rel_path = ? WHERE id = ?",
+                                            [scanned_mtime, scanned_size, qhash, parent_p, db_id],
                                         )
                     else:
                         unmatched_scanned[rel_p] = scanned
@@ -246,10 +284,8 @@ class Orchestrator:
                 if db_rel not in scanned_map:
                     unmatched_db[db_id] = db_item
 
-            # MOVED detection
-            scanned_hashes = {}
-            db_hashes = {}
-
+            # MOVED detection using Stage 2 Quick-Hash / Stage 3 Full-Hash on collision
+            scanned_hashes: Dict[str, str] = {}
             for rel_p, item in unmatched_scanned.items():
                 is_dir = item[5]
                 if not is_dir:
@@ -257,36 +293,66 @@ class Orchestrator:
                     if file_p.is_file():
                         scanned_hashes[rel_p] = compute_quick_hash(file_p)
 
+            # Map hashes to DB items
+            db_hash_map: Dict[str, List[Tuple[Any, ...]]] = {}
             for db_id, db_item in list(unmatched_db.items()):
-                db_rel, db_is_dir, db_hash = db_item[1], db_item[3], db_item[6]
-                if not db_is_dir:
-                    if db_hash:
-                        db_hashes[db_id] = db_hash
+                db_is_dir = db_item[3]
+                db_hash = db_item[6]
+                if not db_is_dir and db_hash:
+                    db_hash_map.setdefault(db_hash, []).append(db_item)
 
             moved_scanned = set()
             moved_db = set()
 
             for scanned_rel, s_hash in scanned_hashes.items():
-                for db_id, d_hash in db_hashes.items():
-                    if db_id not in moved_db and s_hash == d_hash:
-                        stats["moved"] += 1
-                        moved_scanned.add(scanned_rel)
-                        moved_db.add(db_id)
+                matching_candidates = [
+                    item for item in db_hash_map.get(s_hash, []) if item[0] not in moved_db
+                ]
 
-                        if not dry_run:
-                            item = unmatched_scanned[scanned_rel]
-                            fname, ext, parent_p, size_b, created_at, modified_at = (
-                                item[1], item[2], item[4], item[6], item[7], item[8]
-                            )
-                            conn.execute(
-                                """
-                                UPDATE entries
-                                SET relative_path = ?, name = ?, extension = ?, parent_rel_path = ?, size_bytes = ?, modified_at = ?, content_hash = ?
-                                WHERE id = ?
-                                """,
-                                [scanned_rel, fname, ext, parent_p, size_b, modified_at, s_hash, db_id],
-                            )
-                        break
+                if not matching_candidates:
+                    continue
+
+                file_p = target_path_obj / scanned_rel
+
+                # If Quick-Hash collision occurs (multiple candidate DB items share exact same quick hash)
+                if len(matching_candidates) > 1:
+                    full_s_hash = compute_full_hash(file_p) if file_p.is_file() else None
+                    # Filter candidates whose full hash matches (if stored or if file accessible)
+                    full_matching = []
+                    for cand in matching_candidates:
+                        cand_hash = cand[6]
+                        if cand_hash and cand_hash.startswith("f:"):
+                            if cand_hash == full_s_hash:
+                                full_matching.append(cand)
+                        else:
+                            full_matching.append(cand)
+                    if full_matching:
+                        matching_candidates = full_matching
+
+                # Select best candidate based on path similarity score
+                best_candidate = max(
+                    matching_candidates,
+                    key=lambda cand: _calculate_path_similarity(scanned_rel, cand[1]),
+                )
+
+                db_id = best_candidate[0]
+                stats["moved"] += 1
+                moved_scanned.add(scanned_rel)
+                moved_db.add(db_id)
+
+                if not dry_run:
+                    item = unmatched_scanned[scanned_rel]
+                    fname, ext, parent_p, size_b, created_at, modified_at = (
+                        item[1], item[2], item[4], item[6], item[7], item[8]
+                    )
+                    conn.execute(
+                        """
+                        UPDATE entries
+                        SET relative_path = ?, name = ?, extension = ?, parent_rel_path = ?, size_bytes = ?, modified_at = ?, content_hash = ?
+                        WHERE id = ?
+                        """,
+                        [scanned_rel, fname, ext, parent_p, size_b, modified_at, s_hash, db_id],
+                    )
 
             # NEW entries
             for rel_p, item in unmatched_scanned.items():
@@ -309,20 +375,41 @@ class Orchestrator:
                             [media_id, fname, ext, rel_p, parent_p if parent_p else None, is_dir, size_bytes, created_at, modified_at, qhash],
                         )
 
-            # DELETED entries
+            # DELETED entries with cascading notes cleanup
             for db_id, db_item in unmatched_db.items():
                 if db_id not in moved_db:
                     stats["deleted"] += 1
                     if not dry_run:
+                        db_rel = db_item[1]
                         db_is_dir = db_item[3]
-                        target_type = "directory" if db_is_dir else "file"
-                        conn.execute(
-                            "DELETE FROM notes WHERE target_type = ? AND target_id = ?",
-                            [target_type, db_id],
-                        )
-                        conn.execute("DELETE FROM entries WHERE id = ?", [db_id])
+
+                        if db_is_dir:
+                            # Delete notes attached to directory and all nested child entries
+                            conn.execute(
+                                """
+                                DELETE FROM notes
+                                WHERE (target_type = 'directory' AND target_id = ?)
+                                   OR (target_type IN ('file', 'directory') AND target_id IN (
+                                       SELECT id FROM entries
+                                       WHERE media_id = ? AND (relative_path = ? OR starts_with(relative_path, ?))
+                                   ));
+                                """,
+                                [db_id, media_id, db_rel, f"{db_rel}/"],
+                            )
+                            # Delete directory entry and all nested child entries
+                            conn.execute(
+                                "DELETE FROM entries WHERE media_id = ? AND (relative_path = ? OR starts_with(relative_path, ?))",
+                                [media_id, db_rel, f"{db_rel}/"],
+                            )
+                        else:
+                            conn.execute(
+                                "DELETE FROM notes WHERE target_type = 'file' AND target_id = ?",
+                                [db_id],
+                            )
+                            conn.execute("DELETE FROM entries WHERE id = ?", [db_id])
 
             if not dry_run:
+                # Re-resolve parent hierarchy for all entries in media_id
                 conn.execute(
                     """
                     UPDATE entries
@@ -330,9 +417,14 @@ class Orchestrator:
                     FROM entries p
                     WHERE entries.media_id = ?
                       AND p.media_id = ?
+                      AND entries.parent_rel_path IS NOT NULL
                       AND entries.parent_rel_path = p.relative_path;
                     """,
                     [media_id, media_id],
+                )
+                conn.execute(
+                    "UPDATE entries SET parent_id = NULL WHERE media_id = ? AND parent_rel_path IS NULL;",
+                    [media_id],
                 )
                 conn.execute("UPDATE entries SET parent_rel_path = NULL WHERE media_id = ?;", [media_id])
                 conn.execute("UPDATE media SET scanned_at = NOW() WHERE id = ?;", [media_id])
