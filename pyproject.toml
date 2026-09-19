@@ -12,6 +12,8 @@ license = { text = "MIT" }
 dependencies = [
     "duckdb>=0.9.0",
     "click>=8.0.0",
+    "rich>=12.0.0",
+    "pandas>=1.5.0",
 ]
 
 [project.optional-dependencies]
@@ -21,6 +23,7 @@ dev = [
 
 [project.scripts]
 grab-medium = "grab_medium.cli:cli"
+investigate-media = "grab_medium.investigate_cli:cli"
 
 [tool.setuptools.packages.find]
 where = ["."]

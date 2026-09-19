@@ -107,3 +107,34 @@ def test_orchestrator_error_log_file_created(tmp_path):
 
     assert Path(log_path).exists()
     db.close()
+
+
+def test_orchestrator_auto_readme_ingestion(tmp_path):
+    scan_root = tmp_path / "media_root"
+    scan_root.mkdir()
+
+    # Add collection-level README
+    (scan_root / "README.md").write_text("Root media description")
+
+    docs_dir = scan_root / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "README.txt").write_text("Docs directory description")
+
+    db_path = str(tmp_path / "test_readme.duckdb")
+    db = Database(db_path)
+    orchestrator = Orchestrator(db)
+
+    media_id = orchestrator.run_scan(name="readme_media", target_path=str(scan_root))
+
+    conn = db.get_connection()
+    notes = conn.execute("SELECT target_type, target_id, source, content FROM notes").fetchall()
+
+    assert len(notes) >= 2
+    sources = [n[2] for n in notes]
+    contents = [n[3] for n in notes]
+
+    assert all(s == "auto_readme" for s in sources)
+    assert "Root media description" in contents
+    assert "Docs directory description" in contents
+
+    db.close()
