@@ -30,16 +30,35 @@ from grab_medium.orchestrator import Orchestrator
     show_default=True,
     help="Error log file path.",
 )
-def cli(name: str, path: str, db_path: str, log_path: str) -> None:
+@click.option(
+    "--sync",
+    is_flag=True,
+    default=False,
+    help="Enable update/sync mode for an existing media collection.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Simulate sync without committing changes to database.",
+)
+def cli(name: str, path: str, db_path: str, log_path: str, sync: bool, dry_run: bool) -> None:
     """grab_medium: High-performance media directory scanner and DuckDB ingester."""
-    click.echo(f"[Scanning {path}...]")
+    mode_str = "[Syncing" if sync else "[Scanning"
+    if dry_run:
+        mode_str += " (Dry Run)"
+    click.echo(f"{mode_str} {path}...]")
+
     db = Database(db_path)
     orchestrator = Orchestrator(db, log_path=log_path)
 
     try:
-        click.echo("[Ingesting metadata...]")
-        media_id = orchestrator.run_scan(name=name, target_path=path)
-        click.echo(f"[Done! Media ID: {media_id} (Errors logged to {log_path})]")
+        click.echo("[Processing metadata...]")
+        res = orchestrator.run_scan(name=name, target_path=path, sync=sync, dry_run=dry_run)
+        if dry_run and isinstance(res, dict):
+            click.echo(f"[Dry Run complete! Summary: {res}]")
+        else:
+            click.echo(f"[Done! Media ID: {res} (Errors logged to {log_path})]")
     except Exception as e:
         click.echo(f"[Error: {e}]", err=True)
         sys.exit(1)
