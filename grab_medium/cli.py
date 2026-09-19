@@ -1,7 +1,9 @@
 """CLI entry point for grab_medium."""
 
 import sys
+from typing import Optional
 import click
+from grab_medium.config import resolve_config, DEFAULT_CONFIG_PATH
 from grab_medium.database import Database
 from grab_medium.orchestrator import Orchestrator
 
@@ -14,14 +16,13 @@ from grab_medium.orchestrator import Orchestrator
 )
 @click.option(
     "--path",
-    required=True,
     type=click.Path(exists=True, file_okay=False, dir_okay=True, readable=True),
+    default=None,
     help="Directory path to scan.",
 )
 @click.option(
     "--db-path",
-    default="grab_medium.duckdb",
-    show_default=True,
+    default=None,
     help="DuckDB database file path.",
 )
 @click.option(
