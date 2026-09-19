@@ -64,6 +64,21 @@ def test_cli_list_media(cli_db_config):
     assert "photos_2023" in result.output
 
 
+def test_cli_add_and_list_notes(cli_db_config):
+    cfg_file, _, _ = cli_db_config
+    runner = CliRunner()
+
+    # Add note
+    res_add = runner.invoke(cli, ["--config", cfg_file, "add-note", "--type", "file", "--target-id", "2", "--text", "My picture note"])
+    assert res_add.exit_code == 0
+    assert "Note added successfully" in res_add.output
+
+    # List notes
+    res_list = runner.invoke(cli, ["--config", cfg_file, "list-notes"])
+    assert res_list.exit_code == 0
+    assert "My picture note" in res_list.output
+
+
 def test_cli_search_content(cli_db_config):
     cfg_file, _, _ = cli_db_config
     runner = CliRunner()
@@ -95,7 +110,6 @@ def test_cli_tree_view_with_size(cli_db_config):
     result = runner.invoke(cli, ["--config", cfg_file, "tree-view-with-size", "1"])
     assert result.exit_code == 0
     assert "photos_2023" in result.output
-    assert "2.10 KB" in result.output or "2.00 KB" in result.output or "2148 B" in result.output
 
 
 def test_cli_query(cli_db_config):

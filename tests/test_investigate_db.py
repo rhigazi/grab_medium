@@ -53,6 +53,7 @@ def test_get_schema_info(db_with_data):
     tables = {row["table_name"] for row in info}
     assert "media" in tables
     assert "entries" in tables
+    assert "notes" in tables
 
 
 def test_list_media(db_with_data):
@@ -64,20 +65,29 @@ def test_list_media(db_with_data):
     assert "work_docs" in names
 
 
-def test_search_content(db_with_data):
+def test_add_and_list_notes(db_with_data):
     inv_db = InvestigateDB(db_with_data)
-    results = inv_db.search_content("beach")
+    note_id = inv_db.add_note(target_type="directory", target_id=11, content="Photos directory note")
+    assert note_id > 0
+
+    notes = inv_db.list_notes(target_type="directory", target_id=11)
+    assert len(notes) == 1
+    assert notes[0]["content"] == "Photos directory note"
+    assert notes[0]["source"] == "manual"
+
+
+def test_search_content_with_notes(db_with_data):
+    inv_db = InvestigateDB(db_with_data)
+    inv_db.add_note(target_type="file", target_id=12, content="Sunny day at Paradise beach")
+
+    results = inv_db.search_content("Paradise")
     assert len(results) == 1
     assert results[0]["name"] == "beach.jpg"
-
-    results_notes = inv_db.search_content("notes")
-    assert len(results_notes) == 1
-    assert results_notes[0]["name"] == "notes.txt"
+    assert results[0]["note_content"] == "Sunny day at Paradise beach"
 
 
 def test_search_file_type(db_with_data):
     inv_db = InvestigateDB(db_with_data)
-    # Search with extension 'jpg' or '.jpg'
     results_jpg = inv_db.search_file_type("vacation_2023", "jpg")
     assert len(results_jpg) == 1
     assert results_jpg[0]["name"] == "beach.jpg"

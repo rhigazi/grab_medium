@@ -1,6 +1,7 @@
 """CLI interface for InvestigateMedia tool."""
 
 import sys
+from typing import Optional
 import click
 from grab_medium.config import resolve_config, load_config
 from grab_medium.database import Database
@@ -119,6 +120,72 @@ def search_file_type_cmd(ctx: click.Context, medium: str, endung: str) -> None:
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
+
+
+@cli.command("add-note")
+@click.option(
+    "--type",
+    "-t",
+    "target_type",
+    type=click.Choice(["collection", "directory", "file"], case_sensitive=False),
+    required=True,
+    help="Target type (collection, directory, file).",
+)
+@click.option(
+    "--target-id",
+    "-i",
+    type=int,
+    required=True,
+    help="Target ID in database.",
+)
+@click.option(
+    "--text",
+    "-m",
+    "content",
+    required=True,
+    help="Note content text.",
+)
+@click.pass_context
+def add_note_cmd(ctx: click.Context, target_type: str, target_id: int, content: str) -> None:
+    """Adds a manual note to a collection, directory, or file."""
+    inv_db: InvestigateDB = ctx.obj["investigate_db"]
+    try:
+        note_id = inv_db.add_note(
+            target_type=target_type,
+            target_id=target_id,
+            content=content,
+            source="manual",
+        )
+        click.echo(f"Note added successfully (ID: {note_id}).")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command("list-notes")
+@click.option(
+    "--type",
+    "-t",
+    "target_type",
+    type=click.Choice(["collection", "directory", "file"], case_sensitive=False),
+    default=None,
+    help="Filter by target type.",
+)
+@click.option(
+    "--target-id",
+    "-i",
+    type=int,
+    default=None,
+    help="Filter by target ID.",
+)
+@click.pass_context
+def list_notes_cmd(ctx: click.Context, target_type: Optional[str], target_id: Optional[int]) -> None:
+    """Lists notes stored in the database."""
+    inv_db: InvestigateDB = ctx.obj["investigate_db"]
+    fmt: FormatType = ctx.obj["format"]
+    notes = inv_db.list_notes(target_type=target_type, target_id=target_id)
+    out = format_output(notes, fmt=fmt)
+    click.echo(out)
 
 
 @cli.command("tree-view")

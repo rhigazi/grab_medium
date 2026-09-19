@@ -51,7 +51,6 @@ def test_build_media_tree(db_with_tree_data):
     assert len(roots) == 1
     root = roots[0]
     assert root.name == "my_media"
-    # Root dir total size should be sum of file1 (1024) + file2 (2048) + photo (1048576) = 1051648
     assert root.size_bytes == 1051648
 
     docs_node = next(c for c in root.children if c.name == "docs")
@@ -65,6 +64,7 @@ def test_render_json_tree(db_with_tree_data):
     root_dict = json_data[0]
     assert root_dict["name"] == "my_media"
     assert root_dict["is_dir"] is True
+    assert root_dict["has_note"] is False
     assert root_dict["size_bytes"] == 1051648
     assert len(root_dict["children"]) == 2
 
@@ -85,3 +85,18 @@ def test_render_terminal_tree(db_with_tree_data):
     assert "docs" in rendered
     assert "file1.txt" in rendered
     assert "1.00 KB" in rendered or "1.00 MB" in rendered
+
+
+def test_render_tree_with_note_indicator(db_with_tree_data):
+    conn = db_with_tree_data.get_connection()
+    conn.execute(
+        "INSERT INTO notes (target_type, target_id, source, content) VALUES ('directory', 2, 'manual', 'Note for docs folder')"
+    )
+
+    roots = build_media_tree(db_with_tree_data, 1)
+    rendered = render_terminal_tree(roots, include_size=False)
+    assert "[NOTE]" in rendered
+
+    json_data = render_json_tree(roots, include_size=False)
+    docs_json = json_data[0]["children"][0]
+    assert docs_json["has_note"] is True

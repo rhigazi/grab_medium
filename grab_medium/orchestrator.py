@@ -140,10 +140,76 @@ class Orchestrator:
                 [media_id],
             )
 
-            # 7. Commit
+            # 7. Post-processing: Auto-Readme Ingestion
+            self._ingest_auto_readmes(conn, media_id, target_path_obj)
+
+            # 8. Commit
             conn.execute("COMMIT;")
             return media_id
 
         except Exception:
             conn.execute("ROLLBACK;")
             raise
+
+    def _ingest_auto_readmes(self, conn, media_id: int, target_path_obj: Path) -> None:
+        """Post-processing step to scan directories for README files and store them as notes."""
+        readme_filenames = {"readme.md", "readme.txt", ".description"}
+        max_bytes = 256 * 1024  # 256 KB
+
+        # 1. Check collection level README
+        if target_path_obj.is_dir():
+            for child in target_path_obj.iterdir():
+                if child.is_file() and child.name.lower() in readme_filenames:
+                    try:
+                        with open(child, "r", encoding="utf-8", errors="replace") as rf:
+                            content = rf.read(max_bytes)
+                        conn.execute(
+                            "DELETE FROM notes WHERE target_type = 'collection' AND target_id = ? AND source = 'auto_readme'",
+                            [media_id],
+                        )
+                        conn.execute(
+                            """
+                            INSERT INTO notes (target_type, target_id, source, content, created_at)
+                            VALUES ('collection', ?, 'auto_readme', ?, NOW())
+                            """,
+                            [media_id, content],
+                        )
+                    except Exception:
+                        pass
+                    break
+
+        # 2. Check each directory entry for this media collection
+        dir_entries = conn.execute(
+            "SELECT id, relative_path FROM entries WHERE media_id = ? AND is_dir = TRUE",
+            [media_id],
+        ).fetchall()
+
+        for entry_id, rel_path in dir_entries:
+            folder_path = target_path_obj / rel_path
+            if not folder_path.exists() or not folder_path.is_dir():
+                if rel_path == target_path_obj.name:
+                    folder_path = target_path_obj
+                elif rel_path.startswith(target_path_obj.name + "/"):
+                    clean_rel = rel_path[len(target_path_obj.name) + 1 :]
+                    folder_path = target_path_obj / clean_rel
+
+            if folder_path.is_dir():
+                for child in folder_path.iterdir():
+                    if child.is_file() and child.name.lower() in readme_filenames:
+                        try:
+                            with open(child, "r", encoding="utf-8", errors="replace") as rf:
+                                content = rf.read(max_bytes)
+                            conn.execute(
+                                "DELETE FROM notes WHERE target_type = 'directory' AND target_id = ? AND source = 'auto_readme'",
+                                [entry_id],
+                            )
+                            conn.execute(
+                                """
+                                INSERT INTO notes (target_type, target_id, source, content, created_at)
+                                VALUES ('directory', ?, 'auto_readme', ?, NOW())
+                                """,
+                                [entry_id, content],
+                            )
+                        except Exception:
+                            pass
+                        break
