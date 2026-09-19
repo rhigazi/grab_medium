@@ -13,6 +13,7 @@ def test_database_init_and_schema(tmp_path):
     tables = [r[0] for r in conn.execute("SHOW TABLES").fetchall()]
     assert "media" in tables
     assert "entries" in tables
+    assert "notes" in tables
 
     db.close()
 
